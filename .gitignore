@@ -14,7 +14,8 @@ venv/
 .piolibdeps/
 *.elf
 *.bin
-*.hex
+*.hexclear
+
 esp32_firmware/.pio/
 
 # VS Code & IDEs
