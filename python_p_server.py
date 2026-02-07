@@ -81,28 +81,34 @@ class AttackDetector:
     
     def detect_nmap_scan(self, ip, mac, open_ports, open_port_count):
         threats = []
-        if open_port_count > 15:
+        # Real Nmap scans typically show 20+ ports open
+        # Legitimate servers may have 10-15 ports
+        if open_port_count > 20:
             threats.append({
                 'type': 'NMAP_SUSPICIOUS_PORTS',
                 'severity': 'HIGH',
                 'ip': ip,
                 'mac': mac,
-                'description': f'🔍 Scan Nmap! {ip} a {open_port_count} ports',
-                'details': f'Ports: {", ".join(map(str, open_ports[:10]))}',
-                'recommendation': 'Vérifiez cet appareil.'
+                'description': f'🔍 Scan Nmap détecté! {ip} a {open_port_count} ports ouverts',
+                'details': f'Ports: {", ".join(map(str, open_ports[:10]))}{"..." if len(open_ports) > 10 else ""}',
+                'recommendation': 'Activité de scan suspecte - Vérifiez cet appareil.'
             })
         return threats
     
     def detect_distributed_ddos(self, current_devices):
         threats = []
-        suspicious_ips = [d.get('ip', '') for d in current_devices if d.get('open_port_count', 0) > 5]
-        if len(suspicious_ips) >= 3:
+        # Look for devices with suspiciously HIGH port counts (nmap scans)
+        # Normal devices have 5-10 ports, scanners have 15+
+        suspicious_ips = [d.get('ip', '') for d in current_devices if d.get('open_port_count', 0) > 15]
+        
+        # Only alert if MANY devices are scanning (distributed attack pattern)
+        if len(suspicious_ips) >= 5:
             threats.append({
                 'type': 'DDOS_DISTRIBUTED',
                 'severity': 'CRITICAL',
-                'description': f'🚨 DDoS DISTRIBUÉE!',
-                'details': f'{len(suspicious_ips)} appareils suspects',
-                'recommendation': 'Isolez ces appareils!'
+                'description': f'🚨 Attaque distribuée détectée!',
+                'details': f'{len(suspicious_ips)} appareils avec scans actifs',
+                'recommendation': 'Botnet possible - Isolez ces appareils!'
             })
         return threats
     
@@ -191,11 +197,14 @@ class AttackDetector:
         return threats
     
     def update_history(self, ip, mac, open_ports=None):
-        if mac not in self.mac_ip_history[mac]:
+        # Track which IPs a MAC has used
+        if ip not in self.mac_ip_history[mac]:
             self.mac_ip_history[mac].append(ip)
             if len(self.mac_ip_history[mac]) > 5:
                 self.mac_ip_history[mac].pop(0)
-        if ip not in self.ip_mac_history[ip]:
+        
+        # Track which MACs an IP has used  
+        if mac not in self.ip_mac_history[ip]:
             self.ip_mac_history[ip].append(mac)
             if len(self.ip_mac_history[ip]) > 5:
                 self.ip_mac_history[ip].pop(0)
@@ -446,6 +455,22 @@ def receive_scan():
             print(f"   - WPS: {pentest_data.get('wps_probes', 0)}")
             print(f"   - Attaquants: {len(pentest_data.get('attackers', []))}")
         
+        # Calculate dominant source percentage for DDoS analysis
+        dominant_percentage = 0
+        if total_packets > 0 and len(top_sources) > 0:
+            dominant_count = top_sources[0].get('packet_count', 0)
+            dominant_percentage = (dominant_count / total_packets) * 100
+        
+        print(f"📈 Analyse DDoS:")
+        print(f"   - Total paquets: {total_packets:,} ({packets_per_sec:,} pkt/s)")
+        print(f"   - Source dominante: {dominant_percentage:.1f}% du trafic")
+        print(f"   - Seuils: 50k (40%), 100k (50%), 200k (60%)")
+        if total_packets < 2000:
+            print(f"   ✅ Trafic NORMAL (< 2,000 paquets) [MODE TEST]")
+        elif dominant_percentage < 40:
+            print(f"   ✅ Trafic distribué (pas de concentration suspecte)")
+
+        
         mac_to_ip = {}
         for device in data.get('devices', []):
             mac = device.get('mac', '').upper()
@@ -470,56 +495,69 @@ def receive_scan():
                         dominant_source = {'ip': ip, 'mac': mac}
                         break
         
-        # ========== ALERTES DDoS ==========
+        # ========== ALERTES DDoS (SEUILS RÉALISTES) ==========
         ddos_threats = []
         
-        if total_packets > 10000:
+        # 20 secondes de capture = seuils adaptés au trafic WiFi réel
+        # IMPORTANT: L'ESP capture des FRAMES WiFi, pas des paquets TCP/IP individuels
+        # - Trafic normal maison: 500-3000 frames (25-150 frames/s)
+        # - Streaming/Gaming: 3000-8000 frames (150-400 frames/s)  
+        # - Attaque DDoS: >10000 frames (>500 frames/s) avec source dominante
+        
+        # Calculer le pourcentage de la source dominante
+        dominant_percentage = 0
+        if dominant_source and len(top_sources) > 0 and total_packets > 0:
+            dominant_percentage = (top_sources[0].get('packet_count', 0) / total_packets) * 100
+        
+        if total_packets > 1500:  # CRITICAL (>75 frames/s)
             threat_data = {
                 'type': 'DDOS_NETWORK_FLOOD',
                 'severity': 'CRITICAL',
-                'details': f'{total_packets:,} paquets ({packets_per_sec:,} pkt/s)',
-                'recommendation': 'CRITIQUE! Isolez.',
+                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s)',
+                'recommendation': 'CRITIQUE! Volume détecté (TEST)',
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
             if dominant_source:
                 threat_data['ip'] = dominant_source['ip']
                 threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'🚨 FLOOD! {dominant_source["ip"]}'
+                threat_data['description'] = f'🚨 DDOS FLOOD! {dominant_source["ip"]} ({dominant_percentage:.1f}% du trafic - {top_sources[0].get("packet_count", 0):,} frames)'
             else:
-                threat_data['description'] = f'🚨 FLOOD!'
+                threat_data['description'] = f'🚨 DDOS FLOOD! ({total_packets:,} frames en 20s)'
             ddos_threats.append(threat_data)
-        elif total_packets > 5000:
+                
+        elif total_packets > 1200:  # HIGH (>60 frames/s)
             threat_data = {
                 'type': 'DDOS_HIGH_TRAFFIC',
                 'severity': 'HIGH',
-                'details': f'{total_packets:,} paquets',
-                'recommendation': 'Surveillez.',
+                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s)',
+                'recommendation': 'Trafic élevé (TEST)',
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
             if dominant_source:
                 threat_data['ip'] = dominant_source['ip']
                 threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'⚠️ Trafic élevé - {dominant_source["ip"]}'
+                threat_data['description'] = f'⚠️ Trafic élevé suspect - {dominant_source["ip"]} ({dominant_percentage:.1f}% - {top_sources[0].get("packet_count", 0):,} frames)'
             else:
-                threat_data['description'] = f'⚠️ Trafic élevé'
+                threat_data['description'] = f'⚠️ Trafic élevé suspect ({total_packets:,} frames)'
             ddos_threats.append(threat_data)
-        elif total_packets > 2000:
+                
+        elif total_packets > 1000:  # MEDIUM (>50 frames/s)
             threat_data = {
                 'type': 'DDOS_MODERATE_TRAFFIC',
                 'severity': 'MEDIUM',
-                'details': f'{total_packets:,} paquets',
-                'recommendation': 'Surveillance.',
+                'details': f'{total_packets:,} frames WiFi ({dominant_percentage:.1f}% d\'une source)',
+                'recommendation': 'Trafic à surveiller (TEST)',
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
             if dominant_source:
                 threat_data['ip'] = dominant_source['ip']
                 threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'⚠️ Trafic modéré - {dominant_source["ip"]}'
+                threat_data['description'] = f'ℹ️ Trafic concentré - {dominant_source["ip"]} ({dominant_percentage:.1f}% - {top_sources[0].get("packet_count", 0):,} frames)'
             else:
-                threat_data['description'] = f'⚠️ Trafic modéré'
+                threat_data['description'] = f'ℹ️ Trafic concentré ({total_packets:,} frames)'
             ddos_threats.append(threat_data)
         
         current_alerts = [a for a in current_alerts if 'DDOS' not in a.get('type', '')]
@@ -1372,7 +1410,7 @@ def dashboard():
                         <div class="stat-card">
                             <div class="live-indicator"></div>
                             <div class="stat-label">Trafic WiFi</div>
-                            <div class="stat-number ${stats.network_packets > 10000 ? 'critical' : stats.network_packets > 5000 ? 'high' : 'safe'}">${stats.network_packets.toLocaleString()}</div>
+                            <div class="stat-number ${stats.network_packets > 200000 ? 'critical' : stats.network_packets > 100000 ? 'high' : 'safe'}">${stats.network_packets.toLocaleString()}</div>
                             <div class="stat-sublabel">${stats.packets_per_sec} pkt/s</div>
                         </div>
                         <div class="stat-card">

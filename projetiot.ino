@@ -481,15 +481,56 @@ void performScan() {
     
     if (getARPEntry(target, mac)) {
       bool exists = false;
+      uint8_t existingIndex = 255;
+      
+      // Check if this exact IP+MAC combination exists
       for (uint8_t j = 0; j < deviceCount; j++) {
-        if (devices[j].ip == i || memcmp(devices[j].mac, mac, 6) == 0) {
+        if (devices[j].ip == i && memcmp(devices[j].mac, mac, 6) == 0) {
+          // Perfect match - same IP and same MAC
           exists = true;
-          devices[j].lastSeen = millis();
+          existingIndex = j;
           break;
         }
       }
       
+      if (exists) {
+        // Update existing device
+        devices[existingIndex].lastSeen = millis();
+      } else {
+        // Check if this IP exists with a different MAC (ARP spoofing or IP change)
+        for (uint8_t j = 0; j < deviceCount; j++) {
+          if (devices[j].ip == i && memcmp(devices[j].mac, mac, 6) != 0) {
+            // Same IP but different MAC - update it
+            Serial.printf("   ⚠️ .%d MAC changed: %02X:%02X:...:%02X -> %02X:%02X:...:%02X\n",
+                          i, devices[j].mac[0], devices[j].mac[1], devices[j].mac[5],
+                          mac[0], mac[1], mac[5]);
+            memcpy(devices[j].mac, mac, 6);
+            devices[j].lastSeen = millis();
+            updateARPCache(i, mac);
+            exists = true;
+            break;
+          }
+        }
+        
+        // Check if this MAC exists with a different IP
+        if (!exists) {
+          for (uint8_t j = 0; j < deviceCount; j++) {
+            if (memcmp(devices[j].mac, mac, 6) == 0 && devices[j].ip != i) {
+              // Same MAC but different IP - update it
+              Serial.printf("   ⚠️ MAC %02X:%02X:...:%02X moved: .%d -> .%d\n",
+                            mac[0], mac[1], mac[5], devices[j].ip, i);
+              devices[j].ip = i;
+              devices[j].lastSeen = millis();
+              updateARPCache(i, mac);
+              exists = true;
+              break;
+            }
+          }
+        }
+      }
+      
       if (!exists) {
+        // New device - add it
         uint8_t port;
         char type = detectDeviceType(target, mac, port);
         
@@ -850,6 +891,9 @@ void handleScan() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+  
+  // Suppress WiFiClient error logs for cleaner output
+  Serial.setDebugOutput(false);
   
   Serial.println("\n╔════════════════════════════════╗");
   Serial.println("║  ESP PENTEST DETECTOR v4.1     ║");
