@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
@@ -32,7 +33,7 @@ current_stats = {
     'status': 'SECURE'
 }
 
-TRUSTED_IPS = ['192.168.1.179', '192.168.1.1']
+TRUSTED_IPS = ['192.168.100.7', '192.168.100.1']
 TRUSTED_MACS = []
 WHITELIST = []
 BLACKLIST = []

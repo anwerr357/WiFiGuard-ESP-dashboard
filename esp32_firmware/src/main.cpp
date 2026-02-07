@@ -7,9 +7,9 @@
 
 
 // ==================== CONFIGURATION ====================
-#define SSID "Flybox_EF0E"
-#define PASS "dxabb9iyx37w"
-#define PC_IP "192.168.1.178"
+#define SSID "TOPNET_6D92"
+#define PASS "2EHXVNF6YM68"
+#define PC_IP "192.168.100.7"
 #define PC_PORT 5000
 
 #define MAX_DEVICES 30           //  Reduced for faster scanning
@@ -267,7 +267,7 @@ void performScan() {
   
   // ========== ÉTAPE 2 : IPS PRIORITAIRES ==========
   Serial.println("═══ [2/5] 🚀 IPS PRIORITAIRES ═══");
-  uint8_t priority[] = {1, 254, 100, 178};  // Added your laptop .178 specifically
+  uint8_t priority[] = {1, 254, 14, 7};  
   
   for (uint8_t i = 0; i < sizeof(priority); i++) {
     if (priority[i] == localIP[3]) continue;
@@ -343,7 +343,7 @@ void performScan() {
         }
       }
       
-      if (!exists) {
+       if (!exists) {
         uint8_t port;
         char type = detectDeviceType(target, mac, port);
         
