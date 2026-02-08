@@ -541,7 +541,7 @@ def receive_scan():
                 'type': 'DDOS_NETWORK_FLOOD',
                 'severity': 'CRITICAL',
                 'description': f'🚨 DDOS FLOOD! {top_suspicious["ip"]} ({top_suspicious["percentage"]:.1f}% du trafic)',
-                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s) | Sources suspectes: {", ".join([f"{s["ip"]}({s["percentage"]:.0f}%)" for s in suspicious_sources[:5]])}',
+                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s) | Sources suspectes: {", ".join(["{0}({1:.0f}%)".format(s["ip"], s["percentage"]) for s in suspicious_sources[:5]])}',
                 'recommendation': '🚨 CRITIQUE! Inondation réseau détectée - Bloquer source immédiatement',
                 'ip': top_suspicious['ip'],
                 'mac': top_suspicious['mac'],
@@ -556,7 +556,7 @@ def receive_scan():
                 'type': 'DDOS_DISTRIBUTED_FLOOD',
                 'severity': 'CRITICAL',
                 'description': f'🚨 DDOS DISTRIBUÉ! {len(high_traffic_sources)} sources actives',
-                'details': f'{total_packets:,} frames WiFi | Sources: {", ".join([f"{s["ip"]}({s["percentage"]:.0f}%)" for s in high_traffic_sources])}',
+                'details': f'{total_packets:,} frames WiFi | Sources: {", ".join(["{0}({1:.0f}%)".format(s["ip"], s["percentage"]) for s in high_traffic_sources])}',
                 'recommendation': '🚨 CRITIQUE! Attaque distribuée - Plusieurs sources malveillantes',
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
