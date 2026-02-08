@@ -489,7 +489,7 @@ def receive_scan():
             resolved_sources.append(source_info)
         
         # Calculate dominant percentage ONCE
-        dominant_percentage = resolved_sources[0]['percentage'] if resolved_sources else 0
+        dominant_percentage = resolved_sources[0]['percentage'] if len(resolved_sources) > 0 else 0
         
         # ========== IDENTIFY SUSPICIOUS SOURCES ==========
         suspicious_sources = [
@@ -509,14 +509,15 @@ def receive_scan():
         for i, source in enumerate(resolved_sources[:5]):
             resolution_method = ""
             if source['ip']:
-                if source.get('mac') in mac_to_device:
+                if source['mac'] in mac_to_device:
                     resolution_method = "(device lookup)"
                 else:
                     resolution_method = "(ESP IP)"
             else:
                 resolution_method = "(unresolved)"
             
-            print(f"   - Source #{i+1}: {source.get('ip', 'N/A')} - {source['percentage']:.1f}% {resolution_method}")
+            ip_display = source['ip'] if source['ip'] else 'N/A'
+            print(f"   - Source #{i+1}: {ip_display} - {source['percentage']:.1f}% {resolution_method}")
         
         if total_packets < 2000:
             print(f"   ✅ Trafic NORMAL (< 2,000 paquets) [MODE TEST]")
@@ -560,9 +561,9 @@ def receive_scan():
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
-            if high_traffic_sources:
-                threat_data['ip'] = high_traffic_sources[0]['ip']
-                threat_data['mac'] = high_traffic_sources[0]['mac']
+            # high_traffic_sources always has IPs (filtered from suspicious_sources which requires IP)
+            threat_data['ip'] = high_traffic_sources[0]['ip']
+            threat_data['mac'] = high_traffic_sources[0]['mac']
             ddos_threats.append(threat_data)
         
         elif total_packets > 1200 and dominant_percentage > 40 and len(suspicious_sources) > 0:
@@ -597,7 +598,7 @@ def receive_scan():
             }
             ddos_threats.append(threat_data)
         
-        elif total_packets > 1500 and dominant_percentage < 30:
+        elif total_packets > 1500 and dominant_percentage < 30 and len(resolved_sources) > 0:
             # High volume but evenly distributed - no alert
             print(f"   ℹ️ Volume élevé mais trafic distribué uniformément, probablement normal")
         
