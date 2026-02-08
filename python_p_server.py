@@ -456,45 +456,72 @@ def receive_scan():
             print(f"   - WPS: {pentest_data.get('wps_probes', 0)}")
             print(f"   - Attaquants: {len(pentest_data.get('attackers', []))}")
         
-        # Calculate dominant source percentage for DDoS analysis
-        dominant_percentage = 0
-        if total_packets > 0 and len(top_sources) > 0:
-            dominant_count = top_sources[0].get('packet_count', 0)
-            dominant_percentage = (dominant_count / total_packets) * 100
-        
-        print(f"📈 Analyse DDoS:")
-        print(f"   - Total paquets: {total_packets:,} ({packets_per_sec:,} pkt/s)")
-        print(f"   - Source dominante: {dominant_percentage:.1f}% du trafic")
-        print(f"   - Seuils: 50k (40%), 100k (50%), 200k (60%)")
-        if total_packets < 2000:
-            print(f"   ✅ Trafic NORMAL (< 2,000 paquets) [MODE TEST]")
-        elif dominant_percentage < 40:
-            print(f"   ✅ Trafic distribué (pas de concentration suspecte)")
-
-        
-        mac_to_ip = {}
+        # ========== BUILD MAC TO DEVICE LOOKUP ==========
+        # Build MAC to device lookup using full MAC string
+        mac_to_device = {}
         for device in data.get('devices', []):
             mac = device.get('mac', '').upper()
             ip = device.get('ip', '')
             if mac and ip:
-                try:
-                    mac_suffix = int(mac.split(':')[-1], 16)
-                    mac_to_ip[mac_suffix] = {'ip': ip, 'mac': mac}
-                except (ValueError, IndexError):
-                    pass
+                mac_to_device[mac] = {'ip': ip, 'mac': mac}
         
-        dominant_source = None
-        if len(top_sources) > 0:
-            mac_suffix = top_sources[0].get('mac_suffix', 0)
-            if mac_suffix in mac_to_ip:
-                dominant_source = mac_to_ip[mac_suffix]
+        # ========== RESOLVE ALL TOP SOURCES ==========
+        resolved_sources = []
+        for source in top_sources:
+            source_mac = source.get('mac', '').upper()
+            source_ip = source.get('ip', '')
+            packet_count = source.get('packet_count', 0)
+            percentage = (packet_count / total_packets * 100) if total_packets > 0 else 0
+            
+            source_info = {
+                'mac': source_mac,
+                'packet_count': packet_count,
+                'percentage': percentage,
+                'ip': None
+            }
+            
+            # Try to resolve IP: first from ESP's resolution, then from device list
+            if source_ip:
+                source_info['ip'] = source_ip
+            elif source_mac in mac_to_device:
+                source_info['ip'] = mac_to_device[source_mac]['ip']
+            
+            resolved_sources.append(source_info)
+        
+        # Calculate dominant percentage ONCE
+        dominant_percentage = resolved_sources[0]['percentage'] if resolved_sources else 0
+        
+        # ========== IDENTIFY SUSPICIOUS SOURCES ==========
+        suspicious_sources = [
+            s for s in resolved_sources
+            if s['ip'] and s['ip'] not in TRUSTED_IPS and s['percentage'] > 10
+        ]
+        
+        high_traffic_sources = [s for s in suspicious_sources if s['percentage'] > 15]
+        
+        # ========== LOGGING ==========
+        print(f"📈 Analyse DDoS:")
+        print(f"   - Total paquets: {total_packets:,} ({packets_per_sec:,} pkt/s)")
+        print(f"   - Sources résolues: {len(resolved_sources)}")
+        print(f"   - Sources suspectes: {len(suspicious_sources)}")
+        print(f"   - Source dominante: {dominant_percentage:.1f}% du trafic")
+        
+        for i, source in enumerate(resolved_sources[:5]):
+            resolution_method = ""
+            if source['ip']:
+                if source.get('mac') in mac_to_device:
+                    resolution_method = "(device lookup)"
+                else:
+                    resolution_method = "(ESP IP)"
             else:
-                for device in data.get('devices', []):
-                    ip = device.get('ip', '')
-                    mac = device.get('mac', '').upper()
-                    if ip not in TRUSTED_IPS:
-                        dominant_source = {'ip': ip, 'mac': mac}
-                        break
+                resolution_method = "(unresolved)"
+            
+            print(f"   - Source #{i+1}: {source.get('ip', 'N/A')} - {source['percentage']:.1f}% {resolution_method}")
+        
+        if total_packets < 2000:
+            print(f"   ✅ Trafic NORMAL (< 2,000 paquets) [MODE TEST]")
+        elif dominant_percentage < 30:
+            print(f"   ✅ Trafic distribué (pas de concentration suspecte)")
         
         # ========== ALERTES DDoS (SEUILS RÉALISTES) ==========
         ddos_threats = []
@@ -505,61 +532,74 @@ def receive_scan():
         # - Streaming/Gaming: 3000-8000 frames (150-400 frames/s)  
         # - Attaque DDoS: >10000 frames (>500 frames/s) avec source dominante
         
-        # Calculer le pourcentage de la source dominante
-        dominant_percentage = 0
-        if dominant_source and len(top_sources) > 0 and total_packets > 0:
-            dominant_percentage = (top_sources[0].get('packet_count', 0) / total_packets) * 100
-        
-        if total_packets > 1500:  # CRITICAL (>75 frames/s)
+        # TIERED DETECTION: Combine volume AND concentration
+        if total_packets > 1500 and dominant_percentage > 50 and len(suspicious_sources) > 0:
+            # CRITICAL single-source flood
+            top_suspicious = suspicious_sources[0]
             threat_data = {
                 'type': 'DDOS_NETWORK_FLOOD',
                 'severity': 'CRITICAL',
-                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s)',
-                'recommendation': 'CRITIQUE! Volume détecté (TEST)',
+                'description': f'🚨 DDOS FLOOD! {top_suspicious["ip"]} ({top_suspicious["percentage"]:.1f}% du trafic)',
+                'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s) | Sources suspectes: {", ".join([f"{s["ip"]}({s["percentage"]:.0f}%)" for s in suspicious_sources[:5]])}',
+                'recommendation': '🚨 CRITIQUE! Inondation réseau détectée - Bloquer source immédiatement',
+                'ip': top_suspicious['ip'],
+                'mac': top_suspicious['mac'],
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
-            if dominant_source:
-                threat_data['ip'] = dominant_source['ip']
-                threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'🚨 DDOS FLOOD! {dominant_source["ip"]} ({dominant_percentage:.1f}% du trafic - {top_sources[0].get("packet_count", 0):,} frames)'
-            else:
-                threat_data['description'] = f'🚨 DDOS FLOOD! ({total_packets:,} frames en 20s)'
             ddos_threats.append(threat_data)
-                
-        elif total_packets > 1200:  # HIGH (>60 frames/s)
+        
+        elif total_packets > 1500 and len(high_traffic_sources) >= 3:
+            # CRITICAL distributed flood
+            threat_data = {
+                'type': 'DDOS_DISTRIBUTED_FLOOD',
+                'severity': 'CRITICAL',
+                'description': f'🚨 DDOS DISTRIBUÉ! {len(high_traffic_sources)} sources actives',
+                'details': f'{total_packets:,} frames WiFi | Sources: {", ".join([f"{s["ip"]}({s["percentage"]:.0f}%)" for s in high_traffic_sources])}',
+                'recommendation': '🚨 CRITIQUE! Attaque distribuée - Plusieurs sources malveillantes',
+                'timestamp': timestamp_str,
+                'timestamp_obj': timestamp_obj
+            }
+            if high_traffic_sources:
+                threat_data['ip'] = high_traffic_sources[0]['ip']
+                threat_data['mac'] = high_traffic_sources[0]['mac']
+            ddos_threats.append(threat_data)
+        
+        elif total_packets > 1200 and dominant_percentage > 40 and len(suspicious_sources) > 0:
+            # HIGH traffic
+            top_suspicious = suspicious_sources[0]
             threat_data = {
                 'type': 'DDOS_HIGH_TRAFFIC',
                 'severity': 'HIGH',
+                'description': f'⚠️ Trafic élevé suspect - {top_suspicious["ip"]} ({top_suspicious["percentage"]:.1f}%)',
                 'details': f'{total_packets:,} frames WiFi ({packets_per_sec:,} frames/s)',
-                'recommendation': 'Trafic élevé (TEST)',
+                'recommendation': '⚠️ Surveiller - Concentration anormale détectée',
+                'ip': top_suspicious['ip'],
+                'mac': top_suspicious['mac'],
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
-            if dominant_source:
-                threat_data['ip'] = dominant_source['ip']
-                threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'⚠️ Trafic élevé suspect - {dominant_source["ip"]} ({dominant_percentage:.1f}% - {top_sources[0].get("packet_count", 0):,} frames)'
-            else:
-                threat_data['description'] = f'⚠️ Trafic élevé suspect ({total_packets:,} frames)'
             ddos_threats.append(threat_data)
-                
-        elif total_packets > 1000:  # MEDIUM (>50 frames/s)
+        
+        elif total_packets > 1000 and dominant_percentage > 30 and len(suspicious_sources) > 0:
+            # MEDIUM traffic
+            top_suspicious = suspicious_sources[0]
             threat_data = {
                 'type': 'DDOS_MODERATE_TRAFFIC',
                 'severity': 'MEDIUM',
+                'description': f'ℹ️ Trafic concentré - {top_suspicious["ip"]} ({top_suspicious["percentage"]:.1f}%)',
                 'details': f'{total_packets:,} frames WiFi ({dominant_percentage:.1f}% d\'une source)',
-                'recommendation': 'Trafic à surveiller (TEST)',
+                'recommendation': 'ℹ️ Trafic à surveiller - Concentration modérée',
+                'ip': top_suspicious['ip'],
+                'mac': top_suspicious['mac'],
                 'timestamp': timestamp_str,
                 'timestamp_obj': timestamp_obj
             }
-            if dominant_source:
-                threat_data['ip'] = dominant_source['ip']
-                threat_data['mac'] = dominant_source['mac']
-                threat_data['description'] = f'ℹ️ Trafic concentré - {dominant_source["ip"]} ({dominant_percentage:.1f}% - {top_sources[0].get("packet_count", 0):,} frames)'
-            else:
-                threat_data['description'] = f'ℹ️ Trafic concentré ({total_packets:,} frames)'
             ddos_threats.append(threat_data)
+        
+        elif total_packets > 1500 and dominant_percentage < 30:
+            # High volume but evenly distributed - no alert
+            print(f"   ℹ️ Volume élevé mais trafic distribué uniformément, probablement normal")
         
         current_alerts = [a for a in current_alerts if 'DDOS' not in a.get('type', '')]
         
