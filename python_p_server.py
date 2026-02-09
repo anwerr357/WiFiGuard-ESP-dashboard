@@ -46,8 +46,6 @@ class AttackDetector:
         self.mac_ip_history = defaultdict(list)
         self.ip_mac_history = defaultdict(list)
         self.gateway_mac = None
-        self.port_scan_history = defaultdict(lambda: {'ports': set(), 'scan_count': 0, 'last_scan': 0})
-        self.rapid_port_changes = defaultdict(int)
         
     def analyze(self, scan_data):
         threats = []
@@ -69,47 +67,10 @@ class AttackDetector:
                 threats.extend(self.detect_gateway_spoofing(mac))
             threats.extend(self.detect_unauthorized_device(mac))
             threats.extend(self.detect_blacklisted_device(mac, ip))
-            if not is_trusted:
-                threats.extend(self.detect_nmap_scan(ip, mac, open_ports, open_port_count))
             self.update_history(ip, mac, open_ports)
         
         threats.extend(self.detect_disappeared_devices(current_devices))
-        current_devices_untrusted = [d for d in current_devices if d.get('ip') not in TRUSTED_IPS and d.get('mac', '').upper() not in TRUSTED_MACS]
-        threats.extend(self.detect_distributed_ddos(current_devices_untrusted))
         self.previous_scan = {d['ip']: d for d in current_devices}
-        return threats
-    
-    def detect_nmap_scan(self, ip, mac, open_ports, open_port_count):
-        threats = []
-        # Real Nmap scans typically show 20+ ports open
-        # Legitimate servers may have 10-15 ports
-        if open_port_count > 20:
-            threats.append({
-                'type': 'NMAP_SUSPICIOUS_PORTS',
-                'severity': 'HIGH',
-                'ip': ip,
-                'mac': mac,
-                'description': f'🔍 Scan Nmap détecté! {ip} a {open_port_count} ports ouverts',
-                'details': f'Ports: {", ".join(map(str, open_ports[:10]))}{"..." if len(open_ports) > 10 else ""}',
-                'recommendation': 'Activité de scan suspecte - Vérifiez cet appareil.'
-            })
-        return threats
-    
-    def detect_distributed_ddos(self, current_devices):
-        threats = []
-        # Look for devices with suspiciously HIGH port counts (nmap scans)
-        # Normal devices have 5-10 ports, scanners have 15+
-        suspicious_ips = [d.get('ip', '') for d in current_devices if d.get('open_port_count', 0) > 15]
-        
-        # Only alert if MANY devices are scanning (distributed attack pattern)
-        if len(suspicious_ips) >= 5:
-            threats.append({
-                'type': 'DDOS_DISTRIBUTED',
-                'severity': 'CRITICAL',
-                'description': f'🚨 Attaque distribuée détectée!',
-                'details': f'{len(suspicious_ips)} appareils avec scans actifs',
-                'recommendation': 'Botnet possible - Isolez ces appareils!'
-            })
         return threats
     
     def detect_arp_spoofing(self, ip, mac):
@@ -1118,7 +1079,6 @@ def dashboard():
                     <span class="detection-badge">MAC Spoofing</span>
                     <span class="detection-badge">MITM Gateway</span>
                     <span class="detection-badge">DDoS Attack</span>
-                    <span class="detection-badge">Nmap Scan</span>
                     <span class="detection-badge">Deauth Attack</span>
                     
                 </div>
