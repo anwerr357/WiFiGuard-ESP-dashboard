@@ -12,11 +12,11 @@
 #define PC_IP "192.168.100.7"
 #define PC_PORT 5000
 
-#define MAX_DEVICES 30           //  Reduced for faster scanning
-#define ARP_PING_DELAY 10        //  10ms (faster)
-#define ARP_WAIT_TIME 2000       //  2000ms (reduced wait)
+#define MAX_DEVICES 50           //  Reduced for faster scanning
+#define ARP_PING_DELAY 3       //  10ms (faster)
+#define ARP_WAIT_TIME 3000       //  2000ms (reduced wait)
 #define PORT_SCAN_TIMEOUT 150    //  150ms (more reliable)
-#define SCAN_PASSES 2            //  2 passes (faster)
+#define SCAN_PASSES 3        //  2 passes (faster)
 
 // ==================== SERVEUR WEB ====================
 WebServer server(80);
@@ -227,6 +227,7 @@ char detectDeviceType(IPAddress ip, uint8_t* mac, uint8_t &port) {
 }
 
 // ==================== SCAN RÉSEAU OPTIMISÉ ====================
+// ==================== SCAN RÉSEAU (ETTERCAP STYLE) ====================
 void performScan() {
   if (scanning) return;
   
@@ -235,7 +236,7 @@ void performScan() {
   scanStartTime = millis();
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║  SCAN RÉSEAU v5.1 OPTIMISÉ LENT       ║");
+  Serial.println("║  SCAN RÉSEAU v6.0 (Ettercap Style)    ║");
   Serial.println("╚════════════════════════════════════════╝");
   
   IPAddress localIP = WiFi.localIP();
@@ -244,139 +245,149 @@ void performScan() {
   Serial.printf("📍 Réseau: %d.%d.%d.0/24\n", base[0], base[1], base[2]);
   Serial.printf("📡 ESP IP: %s\n", localIP.toString().c_str());
   Serial.printf("💾 Cache: %d entrées\n\n", cacheSize);
-  
-  // ========== ÉTAPE 1 : SCAN CACHE ==========
-  if (cacheSize > 0) {
-    Serial.println("═══ [1/5] 💾 SCAN CACHE ═══");
-    for (uint8_t i = 0; i < cacheSize; i++) {
-      if (!arpCache[i].active) continue;
-      
-      IPAddress target(base[0], base[1], base[2], arpCache[i].ip);
-      Serial.printf("   Ping cache: %d.%d.%d.%d\n", base[0], base[1], base[2], arpCache[i].ip);
-      
-      // 3 requêtes ARP (reduced)
-      for (uint8_t r = 0; r < 3; r++) {
-        arpPing(target);
-        delay(10);  // Faster
-      }
-      yield();
-    }
-    delay(1000);  // Reduced wait time
-    Serial.println("   ✅ Cache scanné\n");
-  }
-  
-  // ========== ÉTAPE 2 : IPS PRIORITAIRES ==========
-  Serial.println("═══ [2/5] 🚀 IPS PRIORITAIRES ═══");
-  uint8_t priority[] = {1, 254, 14, 7};  
-  
-  for (uint8_t i = 0; i < sizeof(priority); i++) {
-    if (priority[i] == localIP[3]) continue;
-    
-    IPAddress target(base[0], base[1], base[2], priority[i]);
-    Serial.printf("   Ping prioritaire: .%d\n", priority[i]);
-    
-    // 3 requêtes ARP
-    for (uint8_t r = 0; r < 3; r++) {
-      arpPing(target);
-      delay(ARP_PING_DELAY);
-    }
-    yield();
-  }
-  delay(ARP_WAIT_TIME);  // Use configured wait time
-  Serial.println("   ✅ IPs prioritaires scannées\n");
-  
-  // ========== ÉTAPE 3 : SCAN COMPLET MULTI-PASSES ==========
-  Serial.printf("═══ [3/5] 📡 SCAN COMPLET (%d passes) ═══\n", SCAN_PASSES);
+
+  // ========================================================
+  // PHASE 1: ARP SWEEP (like Ettercap)
+  // Send ALL ARP requests first — don't read anything yet
+  // Ettercap sends one ARP per IP very rapidly, then waits
+  // ========================================================
+  Serial.println("═══ [1/4] 📡 ARP SWEEP (Ettercap Style) ═══");
   
   for (uint8_t pass = 1; pass <= SCAN_PASSES; pass++) {
-    Serial.printf("   🔄 Passe %d/%d...\n", pass, SCAN_PASSES);
+    Serial.printf("   🔄 Sweep %d/%d...\n", pass, SCAN_PASSES);
     
-    for (uint8_t i = 1; i <= 254; i++) {
+    // Sweep the entire subnet rapidly
+    for (uint16_t i = 1; i <= 254; i++) {
       if (i == localIP[3]) continue;
       
       IPAddress target(base[0], base[1], base[2], i);
+      arpPing(target);
       
-      // Nombre de pings selon la passe
-      uint8_t pings = (pass == 1) ? 3 : 2;
-      for (uint8_t p = 0; p < pings; p++) {
-        arpPing(target);
-        delay(pass == 1 ? 8 : 5);  // Faster scanning
-      }
+      // Ettercap uses ~1-3ms between packets
+      delay(ARP_PING_DELAY);
       
-      // Pause tous les X IPs
-      if (i % 10 == 0) {
-        delay(pass == 1 ? 30 : 20);  // Reduced pause
+      // Yield every 20 IPs to keep WiFi stack responsive
+      if (i % 20 == 0) {
         yield();
+        delay(5);
       }
     }
     
-    // Délai entre passes
-    if (pass < SCAN_PASSES) {
-      Serial.printf("   ⏳ Attente %dms...\n", pass == 1 ? 1500 : 1000);
-      delay(pass == 1 ? 1500 : 1000);  // Reduced inter-pass delay
+    // Wait for all replies to arrive before next pass
+    Serial.printf("   ⏳ Attente réponses (%dms)...\n", ARP_WAIT_TIME);
+    
+    // Active wait — yield frequently so ARP replies get processed
+    unsigned long waitStart = millis();
+    while (millis() - waitStart < ARP_WAIT_TIME) {
+      delay(10);
+      yield();
     }
   }
-  Serial.println("   ✅ Scan complet terminé\n");
+  Serial.println("   ✅ ARP sweep terminé\n");
+
+  // ========================================================
+  // PHASE 2: HARVEST ARP TABLE
+  // Read ALL entries that responded — NO port scanning yet!
+  // This is the key Ettercap difference: discover first, scan later
+  // ========================================================
+  Serial.println("═══ [2/4] 📖 LECTURE TABLE ARP ═══");
   
-  // ========== ÉTAPE 4 : LECTURE TABLE ARP ==========
-  Serial.println("═══ [4/5] 📖 LECTURE ARP + PORTS ═══");
-  unsigned long step4Start = millis();
+  // Temporary storage for discovered hosts
+  struct DiscoveredHost {
+    uint8_t ip;
+    uint8_t mac[6];
+  };
+  DiscoveredHost discovered[MAX_DEVICES];
+  uint8_t discoveredCount = 0;
   
-  for (uint8_t i = 1; i <= 254 && deviceCount < MAX_DEVICES; i++) {
-    if (millis() - step4Start > 5000) {  // Timeout 5s
-      Serial.println("   ⚠️ Timeout scan ports! Passage suite...");
-      break;
-    }
+  for (uint16_t i = 1; i <= 254; i++) {
     if (i == localIP[3]) continue;
+    if (discoveredCount >= MAX_DEVICES) break;
     
     IPAddress target(base[0], base[1], base[2], i);
     uint8_t mac[6] = {0};
     
     if (getARPEntry(target, mac)) {
-      // Vérifier si déjà dans la liste
+      // Check MAC isn't all zeros
+      bool validMAC = false;
+      for (uint8_t m = 0; m < 6; m++) {
+        if (mac[m] != 0) { validMAC = true; break; }
+      }
+      if (!validMAC) continue;
+      
+      // Check for duplicates
       bool exists = false;
-      for (uint8_t j = 0; j < deviceCount; j++) {
-        if (devices[j].ip == i || memcmp(devices[j].mac, mac, 6) == 0) {
+      for (uint8_t j = 0; j < discoveredCount; j++) {
+        if (discovered[j].ip == i || memcmp(discovered[j].mac, mac, 6) == 0) {
           exists = true;
-          devices[j].lastSeen = millis();
           break;
         }
       }
       
-       if (!exists) {
-        uint8_t port;
-        char type = detectDeviceType(target, mac, port);
+      if (!exists) {
+        discovered[discoveredCount].ip = i;
+        memcpy(discovered[discoveredCount].mac, mac, 6);
+        discoveredCount++;
         
-        devices[deviceCount].ip = i;
-        memcpy(devices[deviceCount].mac, mac, 6);
-        devices[deviceCount].port = port;
-        devices[deviceCount].type = type;
-        devices[deviceCount].lastSeen = millis();
-        devices[deviceCount].openPortCount = 0;
-        devices[deviceCount].scanAttempts = 0;
-        
-        scanPortsQuick(target, devices[deviceCount]);
-        
-        Serial.printf("   ✅ %d.%d.%d.%d | %02X:%02X:%02X:%02X:%02X:%02X | Type:%c | Ports:%d\n",
-                      base[0], base[1], base[2], i,
-                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                      type, devices[deviceCount].openPortCount);
-        
-        updateARPCache(i, mac);
-        deviceCount++;
+        Serial.printf("   ✅ .%-3d | %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      i, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
       }
     }
+  }
+  Serial.printf("   📊 %d hôtes découverts\n\n", discoveredCount);
+
+  // ========================================================
+  // PHASE 3: REGISTER DEVICES (port scan disabled for speed)
+  // To re-enable port scanning, uncomment the detectDeviceType
+  // and scanPortsQuick lines below
+  // ========================================================
+  Serial.println("═══ [3/4] 📋 ENREGISTREMENT APPAREILS ═══");
+  
+  for (uint8_t i = 0; i < discoveredCount; i++) {
+    IPAddress target(base[0], base[1], base[2], discovered[i].ip);
+    
+    // Port scan disabled — set all devices as Unknown type
+    // To re-enable for demo, uncomment the next 2 lines and comment the 2 after:
+    // uint8_t port = 0;
+    // char type = detectDeviceType(target, discovered[i].mac, port);
+    uint8_t port = 0;
+    char type = 'U';
+    
+    devices[deviceCount].ip = discovered[i].ip;
+    memcpy(devices[deviceCount].mac, discovered[i].mac, 6);
+    devices[deviceCount].port = port;
+    devices[deviceCount].type = type;
+    devices[deviceCount].lastSeen = millis();
+    devices[deviceCount].openPortCount = 0;
+    devices[deviceCount].scanAttempts = 0;
+    
+    // Port scan disabled — uncomment for demo:
+    // scanPortsQuick(target, devices[deviceCount]);
+    
+    Serial.printf("   %d. %d.%d.%d.%-3d | %02X:%02X:%02X:%02X:%02X:%02X | Type:%c\n",
+                  deviceCount + 1,
+                  base[0], base[1], base[2], discovered[i].ip,
+                  discovered[i].mac[0], discovered[i].mac[1], discovered[i].mac[2],
+                  discovered[i].mac[3], discovered[i].mac[4], discovered[i].mac[5],
+                  type);
+    
+    updateARPCache(discovered[i].ip, discovered[i].mac);
+    deviceCount++;
+    
     yield();
   }
-  
-  // ========== ÉTAPE 5 : FINALISATION ==========
-  Serial.println("\n═══ [5/5] 🧹 FINALISATION ═══");
+  Serial.printf("   ✅ %d appareils enregistrés\n\n", deviceCount);
+
+  // ========================================================
+  // PHASE 4: FINALIZATION
+  // ========================================================
+  Serial.println("═══ [4/4] 🧹 FINALISATION ═══");
   cleanupARPCache();
   
   unsigned long duration = millis() - scanStartTime;
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.printf("║  ✅ SCAN TERMINÉ                       ║\n");
+  Serial.printf("║  ✅ SCAN TERMINÉ (Ettercap Style)     ║\n");
   Serial.println("╠════════════════════════════════════════╣");
   Serial.printf("║  📊 Appareils trouvés: %2d              ║\n", deviceCount);
   Serial.printf("║  ⏱️  Durée: %3lus                       ║\n", duration/1000);
@@ -385,8 +396,6 @@ void performScan() {
   
   scanning = false;
 }
-
-// ==================== SNIFFER DDOS ====================
 void performDDoSDetection() {
   Serial.println("\n╔════════════════════════════════════╗");
   Serial.println("║   DÉTECTION DDoS (20s)             ║");
@@ -396,6 +405,11 @@ void performDDoSDetection() {
   totalPacketsCaptured = 0;
   topSourceCount = 0;
 
+  // ✅ SAVE the channel BEFORE disconnecting
+  uint8_t primaryChannel = WiFi.channel();
+  if (primaryChannel == 0) primaryChannel = 6;
+  
+  Serial.printf("📡 Canal du routeur: %d\n", primaryChannel);
   Serial.println("⚠️  Déconnexion WiFi...");
   WiFi.disconnect();
   delay(100);
@@ -408,24 +422,18 @@ void performDDoSDetection() {
 
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&packetSnifferCallback);
-  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+  
+  // ✅ Use the SAVED channel (your router's actual channel)
+  esp_wifi_set_channel(primaryChannel, WIFI_SECOND_CHAN_NONE);
+  Serial.printf("🔒 Sniffing locked on Channel %d\n", primaryChannel);
 
   isSniffing = true;
   snifferStartTime = millis();
 
   Serial.println("🔍 Capture en cours...");
 
-  // FIX: Sniff ONLY on the connected channel (Router's channel) to catch 100% of traffic
-  uint8_t primaryChannel = WiFi.channel();
-  if (primaryChannel == 0) primaryChannel = 6; // Default to 6 if unknown
-  
-  esp_wifi_set_channel(primaryChannel, WIFI_SECOND_CHAN_NONE);
-  Serial.printf("🔒 Sniffing locked on Channel %d (Current WiFi)\n", primaryChannel);
-
   while (millis() - snifferStartTime < 20000) {
     delay(100);
-    // No channel hopping - stay focused on the target network
-    
     if ((millis() - snifferStartTime) % 2000 < 100) {
        Serial.printf("   📊 %lu paquets capturés...\n", totalPacketsCaptured);
     }
@@ -436,6 +444,8 @@ void performDDoSDetection() {
 
   Serial.printf("\n✅ Total: %lu paquets (%lu pkt/s)\n",
                 totalPacketsCaptured, totalPacketsCaptured / 20);
+  
+  // ... rest of the function stays the same ...
   
   if (topSourceCount > 0) {
     Serial.println("\n📡 Top 5 sources:");
@@ -480,7 +490,6 @@ void performDDoSDetection() {
   }
   Serial.println(WiFi.status() == WL_CONNECTED ? " ✅" : " ❌");
 }
-
 // ==================== JSON ====================
 String buildJSON() {
   String json;
@@ -661,7 +670,7 @@ h1{background:linear-gradient(135deg,#ef5350,#ff6f00,#ff1744);-webkit-background
 </div>
 
 <div class='info-card'>
-<div class='info-title'>🎯 Optimisations v5.1</div>
+<div class='info-title'>🎯 Scan v6.0</div>
 <div class='info-item'><span class='info-key'>📡 Délai ARP</span><span class='info-value'>15ms (vs 8ms)</span></div>
 <div class='info-item'><span class='info-key'>⏳ Attente</span><span class='info-value'>4000ms (vs 2500ms)</span></div>
 <div class='info-item'><span class='info-key'>🔄 Passes</span><span class='info-value'>4 passes (vs 3)</span></div>

@@ -28,7 +28,6 @@ current_stats = {
     'network_packets': 0,
     'packets_per_sec': 0,
     'ddos_count': 0,
-    'pentest_count': 0,
     'last_scan': 'Aucun',
     'status': 'SECURE'
 }
@@ -212,170 +211,6 @@ class AttackDetector:
 
 detector = AttackDetector()
 
-# ==================== DÉTECTION PENTEST WIFI ====================
-def detect_wifi_pentest(pentest_data):
-    """Détecte les outils de pentest WiFi (aireplay-ng, wash, airodump-ng, etc.)"""
-    threats = []
-    
-    if not pentest_data:
-        return threats
-    
-    # Extraction données
-    deauth = pentest_data.get('deauth_frames', 0)
-    disassoc = pentest_data.get('disassoc_frames', 0)
-    beacons = pentest_data.get('beacon_frames', 0)
-    probes = pentest_data.get('probe_requests', 0)
-    eapol = pentest_data.get('eapol_frames', 0)
-    arp = pentest_data.get('arp_requests', 0)
-    sequential_deauth = pentest_data.get('sequential_deauth', 0)
-    broadcast_deauth = pentest_data.get('broadcast_deauth', 0)
-    wps_probes = pentest_data.get('wps_probes', 0)
-    eap_start = pentest_data.get('eap_start_frames', 0)
-    duplicates = pentest_data.get('duplicate_frames', 0)
-    attackers = pentest_data.get('attackers', [])
-    
-    # ========== DÉTECTION AIREPLAY-NG (DEAUTH ATTACK) ==========
-    if deauth > 100 or sequential_deauth > 20 or broadcast_deauth > 10:
-        threat = {
-            'type': 'WIFI_PENTEST_AIREPLAY_DEAUTH',
-            'severity': 'CRITICAL',
-            'description': '🚨 AIREPLAY-NG Deauth Attack détectée!',
-            'details': f'{deauth} deauth frames ({sequential_deauth} rafales, {broadcast_deauth} broadcast)',
-            'recommendation': 'Attaque active! Identifiez l\'attaquant immédiatement.',
-            'tool': 'aireplay-ng -0'
-        }
-        
-        # Identifier attaquant si possible
-        for attacker in attackers:
-            if attacker.get('deauth', 0) > 50:
-                threat['attacker_mac'] = attacker.get('mac', 'Unknown')
-                threat['details'] += f" | Attaquant: {attacker.get('mac', 'Unknown')}"
-                break
-        
-        threats.append(threat)
-    
-    # ========== DÉTECTION MDK3 (BEACON FLOOD) ==========
-    if beacons > 1000:
-        threat = {
-            'type': 'WIFI_PENTEST_MDK3_BEACON',
-            'severity': 'HIGH',
-            'description': '⚠️ MDK3 Beacon Flood détectée!',
-            'details': f'{beacons} beacon frames en 20 secondes',
-            'recommendation': 'Flood de faux AP. Vérifiez les appareils suspects.',
-            'tool': 'mdk3 wlan0 b'
-        }
-        threats.append(threat)
-    
-    # ========== DÉTECTION AIRODUMP-NG (SCAN) ==========
-    if probes > 500:
-        threat = {
-            'type': 'WIFI_PENTEST_AIRODUMP_SCAN',
-            'severity': 'MEDIUM',
-            'description': '⚠️ Airodump-ng scan actif!',
-            'details': f'{probes} probe requests détectées',
-            'recommendation': 'Scan de reconnaissance en cours. Surveiller.',
-            'tool': 'airodump-ng wlan0mon'
-        }
-        
-        for attacker in attackers:
-            if attacker.get('probes', 0) > 200:
-                threat['attacker_mac'] = attacker.get('mac', 'Unknown')
-                threat['details'] += f" | Scanner: {attacker.get('mac', 'Unknown')}"
-                break
-        
-        threats.append(threat)
-    
-    # ========== DÉTECTION WASH/REAVER (WPS ATTACK) ==========
-    if wps_probes > 20 or eap_start > 10:
-        threat = {
-            'type': 'WIFI_PENTEST_WPS_ATTACK',
-            'severity': 'CRITICAL',
-            'description': '🚨 Wash/Reaver WPS Attack!',
-            'details': f'{wps_probes} WPS probes, {eap_start} EAP-Start frames',
-            'recommendation': 'Attaque WPS en cours! Désactivez WPS immédiatement.',
-            'tool': 'wash / reaver'
-        }
-        
-        for attacker in attackers:
-            if attacker.get('eapol', 0) > 10:
-                threat['attacker_mac'] = attacker.get('mac', 'Unknown')
-                threat['details'] += f" | Attaquant: {attacker.get('mac', 'Unknown')}"
-                break
-        
-        threats.append(threat)
-    
-    # ========== DÉTECTION AIREPLAY-NG (ARP INJECTION) ==========
-    if arp > 200:
-        threat = {
-            'type': 'WIFI_PENTEST_ARP_INJECTION',
-            'severity': 'HIGH',
-            'description': '⚠️ Aireplay-ng ARP Injection!',
-            'details': f'{arp} ARP requests injectées',
-            'recommendation': 'Injection ARP pour accélérer capture IVs (WEP).',
-            'tool': 'aireplay-ng -3'
-        }
-        
-        for attacker in attackers:
-            if attacker.get('arp', 0) > 100:
-                threat['attacker_mac'] = attacker.get('mac', 'Unknown')
-                threat['details'] += f" | Injecteur: {attacker.get('mac', 'Unknown')}"
-                break
-        
-        threats.append(threat)
-    
-    # ========== DÉTECTION AIRCRACK-NG (HANDSHAKE CAPTURE) ==========
-    if eapol > 20:
-        threat = {
-            'type': 'WIFI_PENTEST_HANDSHAKE_CAPTURE',
-            'severity': 'HIGH',
-            'description': '⚠️ Aircrack-ng Handshake Capture!',
-            'details': f'{eapol} EAPOL frames capturées',
-            'recommendation': 'Capture 4-way handshake WPA en cours.',
-            'tool': 'aircrack-ng / airodump-ng'
-        }
-        threats.append(threat)
-    
-    # ========== DÉTECTION REPLAY ATTACK ==========
-    if duplicates > 1000:
-        threat = {
-            'type': 'WIFI_PENTEST_REPLAY_ATTACK',
-            'severity': 'MEDIUM',
-            'description': '⚠️ Replay Attack détectée!',
-            'details': f'{duplicates} frames dupliquées',
-            'recommendation': 'Rejoue de paquets. Attaque de type replay.',
-            'tool': 'aireplay-ng -2'
-        }
-        threats.append(threat)
-    
-    # ========== ATTAQUANTS SUSPECTS ==========
-    suspicious_attackers = [a for a in attackers if a.get('suspicious', False)]
-    if len(suspicious_attackers) > 0:
-        for attacker in suspicious_attackers:
-            mac = attacker.get('mac', 'Unknown')
-            deauth_sent = attacker.get('deauth', 0)
-            probes_sent = attacker.get('probes', 0)
-            eapol_sent = attacker.get('eapol', 0)
-            
-            details_parts = []
-            if deauth_sent > 0:
-                details_parts.append(f'{deauth_sent} deauth')
-            if probes_sent > 0:
-                details_parts.append(f'{probes_sent} probes')
-            if eapol_sent > 0:
-                details_parts.append(f'{eapol_sent} EAPOL')
-            
-            threat = {
-                'type': 'WIFI_PENTEST_SUSPICIOUS_MAC',
-                'severity': 'HIGH',
-                'description': f'🎯 Appareil suspect: {mac}',
-                'details': ', '.join(details_parts),
-                'recommendation': 'MAC suspecte avec activité de pentest.',
-                'attacker_mac': mac
-            }
-            threats.append(threat)
-    
-    return threats
-
 def clean_expired_alerts():
     global current_alerts
     now = datetime.now()
@@ -393,7 +228,6 @@ def update_current_stats():
     current_stats['network_packets'] = last_ddos_stats.get('total_packets', 0)
     current_stats['packets_per_sec'] = last_ddos_stats.get('packets_per_sec', 0)
     current_stats['ddos_count'] = len([a for a in current_alerts if 'DDOS' in a.get('type', '')])
-    current_stats['pentest_count'] = len([a for a in current_alerts if 'PENTEST' in a.get('type', '')])
     current_stats['last_scan'] = scan_history[-1]['timestamp'] if scan_history else 'Aucun'
     current_stats['status'] = 'THREAT' if current_stats['alert_count'] > 0 else 'SECURE'
 
@@ -444,17 +278,7 @@ def receive_scan():
         print(f"📡 SCAN - {timestamp_str}")
         print(f"📊 Appareils: {len(data.get('devices', []))}")
         print(f"🔥 Paquets: {total_packets}")
-        
-        # ========== EXTRACTION PENTEST WIFI ==========
-        pentest_data = data.get('wifi_pentest_detection', {})
-        if pentest_data:
-            print(f"🎯 PENTEST WiFi:")
-            print(f"   - Deauth: {pentest_data.get('deauth_frames', 0)}")
-            print(f"   - Beacons: {pentest_data.get('beacon_frames', 0)}")
-            print(f"   - Probes: {pentest_data.get('probe_requests', 0)}")
-            print(f"   - EAPOL: {pentest_data.get('eapol_frames', 0)}")
-            print(f"   - WPS: {pentest_data.get('wps_probes', 0)}")
-            print(f"   - Attaquants: {len(pentest_data.get('attackers', []))}")
+    
         
         # ========== BUILD MAC TO DEVICE LOOKUP ==========
         # Build MAC to device lookup using full MAC string
@@ -609,26 +433,6 @@ def receive_scan():
             current_alerts.append(threat)
             attack_stats[threat['type']] += 1
         
-        # ========== ALERTES PENTEST WIFI ==========
-        pentest_threats = detect_wifi_pentest(pentest_data)
-        
-        for threat in pentest_threats:
-            threat['timestamp'] = timestamp_str
-            threat['timestamp_obj'] = timestamp_obj
-            
-            alerts.append(threat)
-            
-            # Éviter doublons
-            is_duplicate = any(
-                a.get('type') == threat['type'] and 
-                a.get('attacker_mac') == threat.get('attacker_mac')
-                for a in current_alerts
-            )
-            if not is_duplicate:
-                current_alerts.append(threat)
-                attack_stats[threat['type']] += 1
-                
-                print(f"   🚨 {threat['description']}")
         
         # ========== ANALYSE NORMALE ==========
         threats = detector.analyze(data)
@@ -648,7 +452,7 @@ def receive_scan():
         if len(alerts) > 200:
             alerts[:] = alerts[-200:]
         
-        critical_alerts = len([t for t in threats + ddos_threats + pentest_threats if t['severity'] in ['CRITICAL', 'HIGH']])
+        critical_alerts = len([t for t in threats + ddos_threats if t['severity'] in ['CRITICAL', 'HIGH']])
         alert_history.append({'timestamp': timestamp_str, 'count': critical_alerts})
         device_count_history.append({'timestamp': timestamp_str, 'count': len(data.get('devices', []))})
         
@@ -673,9 +477,8 @@ def receive_scan():
         
         update_current_stats()
         
-        print(f"✅ Menaces totales: {len(threats) + len(ddos_threats) + len(pentest_threats)}")
+        print(f"✅ Menaces totales: {len(threats) + len(ddos_threats) }")
         print(f"   - DDoS: {len(ddos_threats)}")
-        print(f"   - Pentest WiFi: {len(pentest_threats)}")
         print(f"   - Autres: {len(threats)}")
         print(f"🔥 Alertes actives: {len(current_alerts)}")
         print(f"{'='*60}\n")
@@ -1317,8 +1120,7 @@ def dashboard():
                     <span class="detection-badge">DDoS Attack</span>
                     <span class="detection-badge">Nmap Scan</span>
                     <span class="detection-badge">Deauth Attack</span>
-                    <span class="detection-badge">Aireplay-ng</span>
-                    <span class="detection-badge">Wash/Reaver</span>
+                    
                 </div>
             </div>
             
@@ -1738,7 +1540,6 @@ if __name__ == '__main__':
     print("📡 Fonctionnalités:")
     print("   - Stats temps réel (5s) ⚡")
     print("   - Expiration alertes (5 min) ⏱️")
-    print("   - Détection pentest WiFi 🎯")
     print("   - Historique complet 📜")
     print("   - Blacklist IP 🚫")
     print("   - Appareils connectés 📱")

